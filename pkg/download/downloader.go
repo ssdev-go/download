@@ -42,7 +42,7 @@ type Progress struct {
 type Downloader struct {
 	*controller.DefaultController
 	fetchBuilders map[string]func() fetcher.Fetcher
-	tasks         map[string]*TaskInfo
+	tasks         sync.Map
 	listener      Listener
 }
 
@@ -55,25 +55,22 @@ func NewDownloader(fbs ...FetcherBuilder) *Downloader {
 			d.fetchBuilders[strings.ToUpper(p)] = builder
 		}
 	}
-	d.tasks = make(map[string]*TaskInfo)
 
 	// 每秒统计一次下载速度
 	go func() {
 		for {
-			if len(d.tasks) > 0 {
-				for _, task := range d.tasks {
-					if task.Status == base.DownloadStatusDone ||
-						task.Status == base.DownloadStatusError ||
-						task.Status == base.DownloadStatusPause {
-						continue
-					}
-					current := task.fetcher.Progress().TotalDownloaded()
-					task.Progress.Used = task.timer.Used()
-					task.Progress.Speed = current - task.Progress.Downloaded
-					task.Progress.Downloaded = current
-					d.emit(EventKeyProgress, task)
+			d.tasks.Range(func(k, taskInfo interface{}) bool {
+				task := taskInfo.(*TaskInfo)
+				if task.Status == base.DownloadStatusDone || task.Status == base.DownloadStatusError || task.Status == base.DownloadStatusPause {
+					return false
 				}
-			}
+				current := task.fetcher.Progress().TotalDownloaded()
+				task.Progress.Used = task.timer.Used()
+				task.Progress.Speed = current - task.Progress.Downloaded
+				task.Progress.Downloaded = current
+				d.emit(EventKeyProgress, task)
+				return true
+			})
 			time.Sleep(time.Second)
 		}
 	}()
@@ -101,7 +98,7 @@ func (d *Downloader) Resolve(req *base.Request) (*base.Resource, error) {
 	return fetcher.Resolve(req)
 }
 
-func (d *Downloader) Create(res *base.Resource, opts *base.Options) (err error) {
+func (d *Downloader) Create(res *base.Resource, opts *base.Options) (err error, id string) {
 	fetcher, err := d.buildFetcher(res.Req.URL)
 	if err != nil {
 		return
@@ -113,7 +110,7 @@ func (d *Downloader) Create(res *base.Resource, opts *base.Options) (err error) 
 	if err != nil {
 		return
 	}
-	id := uuid.New().String()
+	id = uuid.New().String()
 	task := &TaskInfo{
 		ID:       id,
 		Res:      res,
@@ -124,7 +121,7 @@ func (d *Downloader) Create(res *base.Resource, opts *base.Options) (err error) 
 		timer:    &util.Timer{},
 		locker:   new(sync.Mutex),
 	}
-	d.tasks[id] = task
+	d.tasks.Store(id, task)
 	task.timer.Start()
 	d.emit(EventKeyStart, task)
 	err = fetcher.Start()
@@ -152,9 +149,12 @@ func (d *Downloader) Create(res *base.Resource, opts *base.Options) (err error) 
 	}()
 	return
 }
-
 func (d *Downloader) Pause(id string) {
-	task := d.tasks[id]
+	taskInfo, isOk := d.tasks.Load(id)
+	if !isOk {
+		return
+	}
+	task := taskInfo.(*TaskInfo)
 	task.locker.Lock()
 	defer task.locker.Unlock()
 	task.timer.Pause()
@@ -162,8 +162,23 @@ func (d *Downloader) Pause(id string) {
 	d.emit(EventKeyPause, task)
 }
 
+func (d *Downloader) Cancel(id string) {
+	taskInfo, isOk := d.tasks.Load(id)
+	if !isOk {
+		return
+	}
+	task := taskInfo.(*TaskInfo)
+	task.locker.Lock()
+	defer task.locker.Unlock()
+	d.emit(EventKeyDone, task)
+}
+
 func (d *Downloader) Continue(id string) {
-	task := d.tasks[id]
+	taskInfo, isOk := d.tasks.Load(id)
+	if !isOk {
+		return
+	}
+	task := taskInfo.(*TaskInfo)
 	task.locker.Lock()
 	defer task.locker.Unlock()
 	task.timer.Continue()
@@ -219,10 +234,13 @@ func (b *boot) Listener(listener Listener) *boot {
 	return b
 }
 
-func (b *boot) Create(opts *base.Options) error {
+func (b *boot) Cancel(taskId string) {
+	defaultDownloader.Cancel(taskId)
+}
+func (b *boot) Create(opts *base.Options) (error, string) {
 	res, err := b.Resolve()
 	if err != nil {
-		return err
+		return err, ""
 	}
 	defaultDownloader.Listener(b.listener)
 	return defaultDownloader.Create(res, opts)
