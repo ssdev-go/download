@@ -8,7 +8,7 @@ import (
 
 func main() {
 	finallyCh := make(chan error)
-	err, taskId := download.Boot().
+	err, taskId := download.NewBoot().
 		URL("https://www.baidu.com/index.html").
 		Listener(func(event *download.Event) {
 			if event.Key == download.EventKeyFinally {
