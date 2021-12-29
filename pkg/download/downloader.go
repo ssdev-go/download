@@ -170,6 +170,7 @@ func (d *Downloader) Cancel(id string) {
 	task := taskInfo.(*TaskInfo)
 	task.locker.Lock()
 	defer task.locker.Unlock()
+	d.tasks.Delete(task.ID)
 	d.emit(EventKeyDone, task)
 }
 
