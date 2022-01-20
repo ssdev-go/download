@@ -18,6 +18,10 @@ func ByteFmt(size int64) string {
 	if frac > 0 {
 		return fmt.Sprintf("%.1f%s", math.Floor(val*10)/10, unitArr[p])
 	} else {
-		return fmt.Sprintf("%d%s", int(val), unitArr[p])
+		if p < 0 {
+			return fmt.Sprintf("%d%s", int(val), "kb")
+		} else {
+			return fmt.Sprintf("%d%s", int(val), unitArr[p])
+		}
 	}
 }
