@@ -294,7 +294,6 @@ func (f *Fetcher) fetchChunk(index int) (err error) {
 			continue
 		}
 		// 请求成功就重置错误次数，连续失败5次才终止
-		i = 0
 		retry, err = func() (bool, error) {
 			defer resp.Body.Close()
 			for {
@@ -340,7 +339,7 @@ func buildClient() *http.Client {
 	jar, _ := cookiejar.New(nil)
 	return &http.Client{
 		Jar:     jar,
-		Timeout: time.Second * 10,
+		Timeout: time.Minute * 5,
 	}
 }
 
